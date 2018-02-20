@@ -30,7 +30,7 @@ tbl, rtbl = p.get_char_sheet()
 
 # ----- Utilities -----------------------------------------------------
 def write_log(log_text, ctx=None):
-    time_text = datetime.datetime.now().time().strftime('%H:%M:%S')
+    time_text = datetime.datetime.now().strftime('%Y%m%d %H:%M:%S')
     ctx_text = '' if ctx is None else \
         "{}@{}".format(ctx.message.author, ctx.message.server)
 

@@ -80,6 +80,7 @@ def get_char_sheet(refresh=False):
         tbl, rtbl = load_char_sheet()
     else:
         char_sheet = request_new_char_sheet()
+        save_char_sheet_raw(char_sheet)
         tbl, rtbl = save_char_sheet(char_sheet)
     return tbl, rtbl
 
