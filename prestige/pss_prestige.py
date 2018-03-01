@@ -13,6 +13,7 @@ from __future__ import unicode_literals
 
 import argparse
 import csv
+import discord
 import re
 import os
 import urllib.request
@@ -35,6 +36,16 @@ def request_new_char_sheet():
 def save_char_sheet_raw(char_sheet):
     with open('pss-chars-raw.txt', 'w') as f:
         f.write(char_sheet)
+
+
+def load_char_sheet_raw():
+    if os.path.isfile('pss-chars-raw.txt'):
+        with open('pss-chars-raw.txt', 'r') as f:
+            raw_text = f.read()
+    else:
+        raw_text = request_new_char_sheet()
+        save_char_sheet_raw(raw_text)
+    return raw_text
 
 
 def save_char_sheet(char_sheet,
@@ -95,15 +106,18 @@ def parse_char_name(char, rtbl):
     char_original = list(rtbl.keys())
     char_lookup = [ fix_char(s) for s in char_original ]
     char_fixed  = fix_char(char)
+
+    # 1. Look for an exact match
     if char_fixed in char_lookup:
         idx = char_lookup.index(char_fixed)
         return char_original[idx]
-    else:
-        m = [ re.search(char_fixed, s) is not None for s in char_lookup ]
+
+    # 2. Perform a search instead
+    m = [ re.search(char_fixed, s) is not None for s in char_lookup ]
+    if sum(m) > 0:
         # idx = m.index(True)  # forward search for match
         idx = len(m)-1 - m[::-1].index(True)  # reverse search
         return char_original[idx]
-    print("Could not find {}".format(char))
     return None
 
 
@@ -198,6 +212,126 @@ def show_new_chars(action='prestige'):
                 print('{}'.format(tbl2[ii]))
             new_chars = True
     return new_chars
+
+
+# ----- Stats Conversion ----------------------------------------------
+specials_lookup = {
+    'AddReload': 'Rush Command',
+    'DamageToCurrentEnemy': 'Critical Strike',
+    'DamageToRoom': 'Ultra Dismantle',
+    'DamageToSameRoomCharacters': 'Poison Gas',
+    'DeductReload': 'System Hack',
+    'FireWalk': 'Fire Walk',
+    'Freeze': 'Freeze',
+    'HealRoomHp': 'Urgent Repair',
+    'HealSameRoomCharacters': 'Healing Rain',
+    'HealSelfHp': 'First Aid',
+    'SetFire': 'Arson'}
+
+
+equipment_lookup = {
+    1: 'head',
+    2: 'body',
+    4: 'leg',
+    8: 'weapon',
+    16: 'accessory'}
+
+
+def convert_eqpt_mask(eqpt_mask):
+    eqpt_list = []
+    for k in equipment_lookup.keys():
+        if (eqpt_mask & k) != 0:
+            eqpt_list = eqpt_list + [equipment_lookup[k]]
+    if len(eqpt_list) == 0:
+        return 'nil'
+    else:
+        return ', '.join(eqpt_list)
+
+
+# ----- Stats API -----------------------------------------------------
+def stats2dict(raw_text):
+    d = {}
+    root = xml.etree.ElementTree.fromstring(raw_text)
+    for c in root:
+        for cc in c:
+            for ccc in cc:
+                if ccc.tag != 'CharacterDesign':
+                    continue
+                char_name = ccc.attrib['CharacterDesignName']
+                d[char_name] = ccc.attrib
+    return d
+
+
+def get_stats(char_name, embed=False):
+    raw_text = load_char_sheet_raw()
+    d = stats2dict(raw_text)
+    if embed is True:
+        return embed_stats(d, char_name)
+    else:
+        return print_stats(d, char_name)
+
+
+def print_stats(d, char):
+    char_name = parse_char_name(char, rtbl)
+    if char_name is None:
+        return None
+
+    stats = d[char_name]
+    special = stats['SpecialAbilityType']
+    if special in specials_lookup.keys():
+        special = specials_lookup[special]
+    eqpt_mask = convert_eqpt_mask(int(stats['EquipmentMask']))
+
+    txt = '**{}** ({})\n'.format(char_name, stats['Rarity'])
+    txt += '{}\n'.format(stats['CharacterDesignDescription'])
+
+    txt += 'Race: {}, Gender: {}\n'.format(
+        stats['RaceType'], stats['GenderType'])
+    txt += 'ability = {}\n'.format(stats['SpecialAbilityFinalArgument'])
+    txt += 'hp = {}\n'.format(stats['FinalHp'])
+    txt += 'attack = {}\n'.format(stats['FinalAttack'])
+    txt += 'repair = {}\n'.format(stats['FinalRepair'])
+    txt += 'pilot = {}\n'.format(stats['FinalPilot'])
+    txt += 'shield = {}\n'.format(stats['FinalShield'])
+    txt += 'weapon = {}\n'.format(stats['FinalWeapon'])
+    txt += 'engine = {}\n'.format(stats['FinalEngine'])
+    txt += 'walk/run speed = {}/{}\n'.format(stats['WalkingSpeed'], stats['RunSpeed'])
+    txt += 'fire resist = {}\n'.format(stats['FireResistance'])
+    txt += 'training capacity = {}\n'.format(stats['TrainingCapacity'])
+    txt += 'special = {}\n'.format(special)
+    txt += 'equipment = {}'.format(eqpt_mask)
+    return txt
+
+
+def embed_stats(d, char):
+    char_name = parse_char_name(char, rtbl)
+    if char_name is None:
+        return None
+
+    stats = d[char_name]
+    special = stats['SpecialAbilityType']
+    if special in specials_lookup.keys():
+        special = specials_lookup[special]
+    eqpt_mask = convert_eqpt_mask(int(stats['EquipmentMask']))
+
+    embed = discord.Embed(
+        title='**{}** ({})\n'.format(char_name, stats['Rarity']),
+        description=stats['CharacterDesignDescription'], color=0x00ff00)
+    embed.add_field(name="Race", value=stats['RaceType'], inline=False)
+    embed.add_field(name="Gender", value=stats['GenderType'], inline=False)
+    embed.add_field(name="hp", value=stats['FinalHp'], inline=False)
+    embed.add_field(name="attack", value=stats['FinalAttack'], inline=False)
+    embed.add_field(name="repair", value=stats['FinalRepair'], inline=False)
+    embed.add_field(name="ability", value=stats['SpecialAbilityFinalArgument'], inline=False)
+    embed.add_field(name="pilot", value=stats['FinalPilot'], inline=False)
+    embed.add_field(name="shield", value=stats['FinalShield'], inline=False)
+    embed.add_field(name="weapon", value=stats['FinalWeapon'], inline=False)
+    embed.add_field(name="engine", value=stats['FinalEngine'], inline=False)
+    embed.add_field(name="run speed", value=stats['RunSpeed'], inline=False)
+    embed.add_field(name="fire resist", value=stats['FireResistance'], inline=False)
+    embed.add_field(name="special", value=special, inline=False)
+    embed.add_field(name="equipment", value=eqpt_mask, inline=False)
+    return embed
 
 
 # ----- Setup ---------------------------------------------------------
