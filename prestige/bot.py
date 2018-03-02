@@ -32,6 +32,8 @@ tbl, rtbl = p.get_char_sheet()
 
 # ----- Utilities -----------------------------------------------------
 def write_log(log_text, ctx=None):
+    if os.path.isfile("debug") is False:
+        return
     time_text = datetime.datetime.now().strftime('%Y%m%d %H:%M:%S')
     ctx_text = '' if ctx is None else \
         '{}@{}'.format(ctx.message.author, ctx.message.server)
