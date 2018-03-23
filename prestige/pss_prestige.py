@@ -13,7 +13,6 @@ from __future__ import unicode_literals
 
 import argparse
 import csv
-import discord
 import re
 import os
 import urllib.request
@@ -99,8 +98,10 @@ def get_char_sheet(refresh=False):
 # ----- Parsing -------------------------------------------------------
 def fix_char(char):
     # Convert to lower case & non alpha-numeric
-    return re.sub('[^a-z0-9]', '', char.lower())
-
+    char = re.sub('[^a-z0-9]', '', char.lower())
+    char = re.sub("captain", "captn", char)
+    char = re.sub("lolita", "lollita", char)
+    return char
 
 def parse_char_name(char, rtbl):
     char_original = list(rtbl.keys())
@@ -167,6 +168,9 @@ def get_prestige_data(char, action, rtbl):
 
 def get_prestige_text(ptbl, tbl, direction):
     # direction = to, from, or full (default)
+
+    if len(ptbl) == 0:
+        return ["No prestige combinations found"]
 
     if direction == "to":
         char_name = tbl[ptbl[0][2]]
@@ -303,50 +307,57 @@ def print_stats(d, char):
     return txt
 
 
-def embed_stats(d, char):
-    char_name = parse_char_name(char, rtbl)
-    if char_name is None:
-        return None
-
-    stats = d[char_name]
-    special = stats['SpecialAbilityType']
-    if special in specials_lookup.keys():
-        special = specials_lookup[special]
-    eqpt_mask = convert_eqpt_mask(int(stats['EquipmentMask']))
-
-    embed = discord.Embed(
-        title='**{}** ({})\n'.format(char_name, stats['Rarity']),
-        description=stats['CharacterDesignDescription'], color=0x00ff00)
-    embed.add_field(name="Race", value=stats['RaceType'], inline=False)
-    embed.add_field(name="Gender", value=stats['GenderType'], inline=False)
-    embed.add_field(name="hp", value=stats['FinalHp'], inline=False)
-    embed.add_field(name="attack", value=stats['FinalAttack'], inline=False)
-    embed.add_field(name="repair", value=stats['FinalRepair'], inline=False)
-    embed.add_field(name="ability", value=stats['SpecialAbilityFinalArgument'], inline=False)
-    embed.add_field(name="pilot", value=stats['FinalPilot'], inline=False)
-    embed.add_field(name="shield", value=stats['FinalShield'], inline=False)
-    embed.add_field(name="weapon", value=stats['FinalWeapon'], inline=False)
-    embed.add_field(name="engine", value=stats['FinalEngine'], inline=False)
-    embed.add_field(name="run speed", value=stats['RunSpeed'], inline=False)
-    embed.add_field(name="fire resist", value=stats['FireResistance'], inline=False)
-    embed.add_field(name="special", value=special, inline=False)
-    embed.add_field(name="equipment", value=eqpt_mask, inline=False)
-    return embed
+# def embed_stats(d, char):
+#     char_name = parse_char_name(char, rtbl)
+#     if char_name is None:
+#         return None
+# 
+#     stats = d[char_name]
+#     special = stats['SpecialAbilityType']
+#     if special in specials_lookup.keys():
+#         special = specials_lookup[special]
+#     eqpt_mask = convert_eqpt_mask(int(stats['EquipmentMask']))
+# 
+#     embed = discord.Embed(
+#         title='**{}** ({})\n'.format(char_name, stats['Rarity']),
+#         description=stats['CharacterDesignDescription'], color=0x00ff00)
+#     embed.add_field(name="Race", value=stats['RaceType'], inline=False)
+#     embed.add_field(name="Gender", value=stats['GenderType'], inline=False)
+#     embed.add_field(name="hp", value=stats['FinalHp'], inline=False)
+#     embed.add_field(name="attack", value=stats['FinalAttack'], inline=False)
+#     embed.add_field(name="repair", value=stats['FinalRepair'], inline=False)
+#     embed.add_field(name="ability", value=stats['SpecialAbilityFinalArgument'], inline=False)
+#     embed.add_field(name="pilot", value=stats['FinalPilot'], inline=False)
+#     embed.add_field(name="shield", value=stats['FinalShield'], inline=False)
+#     embed.add_field(name="weapon", value=stats['FinalWeapon'], inline=False)
+#     embed.add_field(name="engine", value=stats['FinalEngine'], inline=False)
+#     embed.add_field(name="run speed", value=stats['RunSpeed'], inline=False)
+#     embed.add_field(name="fire resist", value=stats['FireResistance'], inline=False)
+#     embed.add_field(name="special", value=special, inline=False)
+#     embed.add_field(name="equipment", value=eqpt_mask, inline=False)
+#     return embed
 
 
 # ----- Setup ---------------------------------------------------------
 tbl, rtbl = get_char_sheet(refresh=False)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=
         'Pixel Starships Prestige & Character Sheet API')
-    parser.add_argument('prestige', choices=['to', 'from'],
+    parser.add_argument('prestige', choices=['to', 'from', 'stats', 'refresh'],
         help='Prestige direction (to/from character)')
     parser.add_argument('character', help='Character to prestige')
     args = parser.parse_args()
 
-    content, ptbl = get_prestige_data(args.character, args.prestige, rtbl)
-    prestige_text = get_prestige_text(ptbl, tbl, args.prestige)
-    for txt in prestige_text:
-        print(txt)
+    if args.prestige == 'refresh':
+        tbl, rtbl = get_char_sheet(refresh=True)
+    elif args.prestige == 'stats':
+        result = get_stats(args.character, embed=False)
+        print(result)
+        # print_stats(rtbl, args.character)
+    else:
+        content, ptbl = get_prestige_data(args.character, args.prestige, rtbl)
+        prestige_text = get_prestige_text(ptbl, tbl, args.prestige)
+        for txt in prestige_text:
+            print(txt)
