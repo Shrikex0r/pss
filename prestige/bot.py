@@ -34,19 +34,19 @@ tbl, rtbl = p.get_char_sheet()
 # welcome_txt = """**Welcome to the Pixel Starships Discord!**
 # This is a place where we can interact with devs and players from other alliances/fleets
 # 1. :zipper_mouth: you can mute any channel to avoid notifications from that channel
-# 2. :microphone: #announcements-and-tips-of-the-day are for anything really important on PSS, as well as a means for the devs to post announcements 
-# 3. :bulb: if you have any suggestions for the game, you can post them in #suggestion-posts. previously discussed suggestions are in #summaries 
+# 2. :microphone: #announcements-and-tips-of-the-day are for anything really important on PSS, as well as a means for the devs to post announcements
+# 3. :bulb: if you have any suggestions for the game, you can post them in #suggestion-posts. previously discussed suggestions are in #summaries
 # 4. :beetle: #game-support is for bugs, etc. \@@TheRealTiffany is usually there
-# 5. :robot: We have a #dolores-bot-room. type “`/help`” to find out how to use the bot for character stats/prestige combos, and item prices/stats. 
+# 5. :robot: We have a #dolores-bot-room. type “`/help`” to find out how to use the bot for character stats/prestige combos, and item prices/stats.
 # 6. :art: Get a Discord color by posting a screenshot with your trophy level in #screenshots
 # 7. :dove: The usual guidelines for any forum apply (try to be civil, don’t spam, etc)."""
 welcome_txt = """**Welcome to the Pixel Starships Discord!**
 This is a place where we can interact with devs and players from other alliances/fleets
 1. 🤐 you can mute any channel to avoid notifications from that channel
-2. 🎤 #announcements-and-tips-of-the-day are for anything really important on PSS, as well as a means for the devs to post announcements 
-3. 💡 if you have any suggestions for the game, you can post them in #suggestion-posts. previously discussed suggestions are in #summaries 
+2. 🎤 #announcements-and-tips-of-the-day are for anything really important on PSS, as well as a means for the devs to post announcements
+3. 💡 if you have any suggestions for the game, you can post them in #suggestion-posts. previously discussed suggestions are in #summaries
 4. 🐞 #game-support is for bugs, etc. \@@TheRealTiffany is usually there
-5. 🤖 We have a #dolores-bot-room. type “`/help`” to find out how to use the bot for character stats/prestige combos, and item prices/stats. 
+5. 🤖 We have a #dolores-bot-room. type “`/help`” to find out how to use the bot for character stats/prestige combos, and item prices/stats.
 6. 🎨 Get a Discord color by posting a screenshot with your trophy level in #screenshots
 7. 🕊 The usual guidelines for any forum apply (try to be civil, don’t spam, etc)."""
 
@@ -203,6 +203,31 @@ async def item(ctx, *, name=None):
 #             await bot.say('Could not find {}'.format(char_name))
 #         else:
 #             await bot.send_message(ctx.message.channel, embed=result)
+
+
+@commands.cooldown(rate=12, per=120, type=commands.BucketType.channel)
+@bot.command(pass_context=True)
+async def best(ctx, slot=None, enhancement=None):
+    if slot is None:
+        txt = 'Enter: {}best [slot] [enhancement]'.format(command_prefix)
+        await bot.say(txt)
+        return
+    txt = command_prefix + 'best {} {}'.format(slot, enhancement)
+    write_log(txt, ctx)
+
+    raw_text = mkt.load_item_design_raw()
+    rtbl = mkt.parse_item_designs(raw_text)
+    df_items = mkt.rtbl2items(rtbl)
+    df_filter = mkt.filter_item(
+        df_items, slot, enhancement,
+        cols=['ItemDesignName', 'EnhancementValue'])
+
+    txt = mkt.itemfilter2txt(df_filter)
+    if txt is None:
+        await bot.say('No entries found for {} slot, {} enhancement'.format(
+            slot, enhancement))
+    else:
+        await bot.say(txt)
 
 
 def get_channel_from_str(server, channel_str):

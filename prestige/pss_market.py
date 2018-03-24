@@ -16,6 +16,7 @@ import datetime
 import csv
 import re
 import os
+import pandas as pd
 import pss_prestige as p
 import urllib.request
 import uuid
@@ -25,6 +26,7 @@ from io import StringIO
 
 # Discord limits messages to 2000 characters
 MESSAGE_CHARACTER_LIMIT = 2000
+HOME = os.getenv('HOME')
 
 
 # ----- Utilities -----------------------------------------------------
@@ -90,6 +92,7 @@ def fix_item(item):
     item = re.sub('[^a-z0-9]', '', item.lower())
     item = re.sub('golden', 'gold', item)
     item = re.sub('armour', 'armor', item)
+    item = re.sub("dmrm(ar)?k2", "dmrmarkii", item)
     return item
 
 
@@ -137,6 +140,62 @@ def filter_item_designs(search_str, rtbl, filter):
         return None
     else:
         return txt.strip('\n')
+
+
+def get_real_name(search_str, rtbl):
+    item_original = list(rtbl.keys())
+    item_lookup = [ fix_item(s) for s in item_original ]
+    item_fixed  = fix_item(search_str)
+
+    try:
+        # Attempt to find an exact match
+        idx = item_lookup.index(item_fixed)
+        return item_original[idx]
+    except:
+        # Perform search if the exact match failed
+        m = [ re.search(item_fixed, n) is not None for n in item_lookup ]
+        item = pd.Series(item_original)[m]
+        if len(item) > 0:
+            return item.iloc[0]
+        else:
+            return None
+
+
+# ----- Best Items ----------------------------------------------------
+def rtbl2items(rtbl):
+    df_rtbl = pd.DataFrame(rtbl).T
+    m1 = df_rtbl.EnhancementType != 'None'
+    m2 = df_rtbl.ItemSubType.str.contains('Equipment')
+    df_items = df_rtbl[m1 & m2].copy()
+    df_items.ItemSubType = df_items.ItemSubType.str.replace('Equipment', '')
+    df_items.ItemSubType = df_items.ItemSubType.str.lower()
+    df_items.EnhancementType = df_items.EnhancementType.str.lower()
+    df_items.EnhancementValue = df_items.EnhancementValue.astype(float)
+    return df_items
+
+
+def filter_item(df_items, slot, enhancement, cols=None):
+    slot = slot.lower()
+    enhancement = enhancement.lower()
+    m1 = df_items.ItemSubType == slot
+    m2 = df_items.EnhancementType == enhancement
+    if cols is None:
+        return df_items[m1 & m2].sort_values(
+            'EnhancementValue', ascending=False).copy()
+    else:
+        return df_items.loc[m1 & m2, cols].sort_values(
+            'EnhancementValue', ascending=False).copy()
+
+
+def itemfilter2txt(df_filter):
+    if len(df_filter) == 0:
+        return None
+
+    txt = ''
+    for row in df_filter.iterrows():
+        data = row[1]
+        txt += '{}: {}\n'.format(data[0], data[1])
+    return txt
 
 
 # ----- Market Data ---------------------------------------------------
@@ -199,8 +258,13 @@ if __name__ == "__main__":
         print(get_market_data().strip())
     else:
         item_name = args.price
-        print('Getting the price of {}'.format(item_name))
         raw_text = load_item_design_raw()
         rtbl = parse_item_designs(raw_text)
-        mkt_text = filter_item_designs(item_name, rtbl)
-        print(mkt_text)
+
+        real_name = get_real_name(item_name, rtbl)
+        if real_name is not None:
+            print('Getting the price of {}'.format(real_name))
+            mkt_text = filter_item_designs(real_name, rtbl, filter='price')
+            print(mkt_text)
+        else:
+            print('{} not found'.format(item_name))
