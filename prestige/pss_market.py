@@ -71,6 +71,7 @@ def load_item_design_raw():
 
 def parse_item_designs(raw_text):
     d = {}
+    # r_lookup = {}
     root = xml.etree.ElementTree.fromstring(raw_text)
     for c in root:
         # print(c.tag) # ListItemDesigns
@@ -83,7 +84,18 @@ def parse_item_designs(raw_text):
 
                 item_name = ccc.attrib['ItemDesignName']
                 d[item_name] = ccc.attrib
+                # r_lookup[int(ccc.attrib['ItemDesignId'])] = item_name
     return d
+
+
+def xmltext_to_df(raw_text):
+    df = pd.DataFrame()
+    root = xml.etree.ElementTree.fromstring(raw_text)
+    for c in root:
+        for cc in c:
+            for i, ccc in enumerate(cc):
+                df = df.append(pd.DataFrame(ccc.attrib, index=[i]))
+    return df
 
 
 # ----- Parsing -------------------------------------------------------
@@ -196,6 +208,27 @@ def itemfilter2txt(df_filter):
         data = row[1]
         txt += '{}: {}\n'.format(data[0], data[1])
     return txt
+
+
+# ----- Item Recipes --------------------------------------------------
+def get_item_rlookup(df):
+    item_rlookup = {}
+    for row in df.iterrows():
+        data = row[1]
+        item_rlookup[data['ItemDesignId']] = data['ItemDesignName']
+    return item_rlookup
+
+
+def get_ingredients(df, item_rlookup, item_name):
+    txt = ''
+    ingredients = df.loc[df['ItemDesignName'] == item_name, 'Ingredients']
+    if len(ingredients) == 1:
+        ingredients = ingredients.values[0].split('|')
+        for ingredient in ingredients:
+            item_id, item_qty = ingredient.split('x')
+            txt += '{} x {}\n'.format(item_rlookup[item_id], item_qty)
+        return txt.strip()
+    return None
 
 
 # ----- Market Data ---------------------------------------------------

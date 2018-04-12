@@ -34,6 +34,11 @@ BOT_VERSION = '0.02'
 
 tbl, rtbl = p.get_char_sheet()
 df_research_designs = rs.get_research_designs()
+
+raw_text = mkt.load_item_design_raw()
+df_items = mkt.xmltext_to_df(raw_text)
+item_rlookup = mkt.get_item_rlookup(df_items)
+
 # welcome_txt = """**Welcome to the Pixel Starships Discord!**
 # This is a place where we can interact with devs and players from other alliances/fleets
 # 1. :zipper_mouth: you can mute any channel to avoid notifications from that channel
@@ -141,25 +146,44 @@ async def prestige(ctx, *, char_name=None):
 
 @commands.cooldown(rate=12, per=120, type=commands.BucketType.channel)
 @bot.command(pass_context=True,
-    brief='Get the prestige recipes of the character specified',
-    description='Get the prestige recipes of the character specified')
-async def recipe(ctx, *, char_name=None):
-    if char_name is None:
-        help_txt = 'Enter: {}recipe [character name]'.format(command_prefix)
+    brief='Get the recipes for a character/item',
+    description='Get the prestige recipes of a character or ingredients for an item')
+async def recipe(ctx, *, name=None):
+    if name is None:
+        help_txt = 'Enter: {}recipe [name]'.format(command_prefix)
         await bot.say(help_txt)
-    else:
-        write_log(command_prefix + 'recipe {}'.format(char_name), ctx)
-        content, ptbl = p.get_prestige_data(char_name, 'to', rtbl)
-        if content is None:
-            await bot.say('Could not find {}'.format(char_name))
-        else:
-            prestige_text = p.get_prestige_text(ptbl, tbl, 'to')
-            try:
-                for txt in prestige_text:
-                    await bot.say(txt)
-            except:
-                write_log('Failed to send the following to bot')
-                write_log('"{}"'.format(prestige_text))
+        return
+
+    write_log(command_prefix + 'recipe {}'.format(name), ctx)
+    recipe_found = False
+
+    # Character Recipe
+    content, ptbl = p.get_prestige_data(name, 'to', rtbl)
+    if content is not None:
+        prestige_text = p.get_prestige_text(ptbl, tbl, 'to')
+        try:
+            for txt in prestige_text:
+                await bot.say(txt)
+        except:
+            write_log('Failed to send the following to bot')
+            write_log('"{}"'.format(prestige_text))
+        recipe_found = True
+        return
+
+    # Item Recipe
+    raw_text = mkt.load_item_design_raw()
+    item_lookup = mkt.parse_item_designs(raw_text)
+    real_name = mkt.get_real_name(name, item_lookup)
+    if real_name is not None:
+        df_items = mkt.xmltext_to_df(raw_text)
+        item_rlookup = mkt.get_item_rlookup(df_items)
+        content = mkt.get_ingredients(df_items, item_rlookup, real_name)
+        content = '**Recipe for {}**\n'.format(real_name) + content
+        await bot.say(content)
+        recipe_found = True
+
+    if recipe_found is False:
+        await bot.say('Could not find {}'.format(name))
 
 
 @commands.cooldown(rate=12, per=120, type=commands.BucketType.channel)
@@ -187,11 +211,12 @@ async def price(ctx, *, item_name=None):
 
     write_log(command_prefix + 'price {}'.format(item_name), ctx)
     raw_text = mkt.load_item_design_raw()
-    rtbl = mkt.parse_item_designs(raw_text)
+    item_lookup = mkt.parse_item_designs(raw_text)
 
-    real_name = mkt.get_real_name(item_name, rtbl)
+    real_name = mkt.get_real_name(item_name, item_lookup)
     if real_name is not None:
-        market_txt = mkt.filter_item_designs(item_name, rtbl, filter='price')
+        market_txt = mkt.filter_item_designs(item_name, item_lookup, filter='price')
+        market_txt = '**Prices as returned by the PSS API**\n' + market_txt
         await bot.say(market_txt)
     else:
         await bot.say('{} not found'.format(item_name))
@@ -215,9 +240,10 @@ async def stats(ctx, *, name=None):
 
     # Next try to find an item match
     raw_text = mkt.load_item_design_raw()
-    rtbl = mkt.parse_item_designs(raw_text)
-    market_txt = mkt.filter_item_designs(name, rtbl, filter='stats')
+    item_lookup = mkt.parse_item_designs(raw_text)
+    market_txt = mkt.filter_item_designs(name, item_lookup, filter='stats')
     if market_txt is not None:
+        market_txt = '**Item Stats**\n' + market_txt
         await bot.say(market_txt)
         found_match = True
 
@@ -252,8 +278,8 @@ async def best(ctx, slot=None, enhancement=None):
     write_log(txt, ctx)
 
     raw_text = mkt.load_item_design_raw()
-    rtbl = mkt.parse_item_designs(raw_text)
-    df_items = mkt.rtbl2items(rtbl)
+    item_lookup = mkt.parse_item_designs(raw_text)
+    df_items = mkt.rtbl2items(item_lookup)
     df_filter = mkt.filter_item(
         df_items, slot, enhancement,
         cols=['ItemDesignName', 'EnhancementValue'])
