@@ -175,10 +175,8 @@ async def recipe(ctx, *, name=None):
     item_lookup = mkt.parse_item_designs(raw_text)
     real_name = mkt.get_real_name(name, item_lookup)
     if real_name is not None:
-        df_items = mkt.xmltext_to_df(raw_text)
-        item_rlookup = mkt.get_item_rlookup(df_items)
-        content = mkt.get_ingredients(df_items, item_rlookup, real_name)
-        content = '**Recipe for {}**\n'.format(real_name) + content
+        content = '**Recipe for {}**\n'.format(real_name)
+        content = content + mkt.get_multi_recipe(real_name, levels=3)
         await bot.say(content)
         recipe_found = True
 
@@ -209,7 +207,7 @@ async def price(ctx, *, item_name=None):
         await bot.say('Enter: {}price [item name]'.format(command_prefix))
         return
 
-    write_log(command_prefix + 'price {}'.format(item_name), ctx)
+    write_log(command_prefix + '{} {}'.format(ctx.invoked_with, item_name), ctx)
     raw_text = mkt.load_item_design_raw()
     item_lookup = mkt.parse_item_designs(raw_text)
 
@@ -222,21 +220,54 @@ async def price(ctx, *, item_name=None):
         await bot.say('{} not found'.format(item_name))
 
 
+def list_to_text(lst, max_chars=1900):
+    txt_list = []
+    txt = ''
+    for i, item in enumerate(lst):
+        if len(txt) > max_chars:
+            txt_list += [txt]
+            txt = item
+        elif i == 0:
+            txt = item
+        else:
+            txt += ', ' + item
+
+    txt_list += [txt]
+    return txt_list
+
+
+@commands.cooldown(rate=12, per=120, type=commands.BucketType.channel)
+@bot.command(name='list', pass_context=True,
+             brief='List items/characters',
+             description='action=chars: shows all characters\naction=newchars: shows the newest 10 characters that have been added to the game\naction=items: shows all items')
+async def list(ctx, *, action=''):
+    write_log(command_prefix + ctx.invoked_with + ' ' + action, ctx)
+    if action == 'newchars' or action == 'chars':
+        txt_list = p.get_char_list(action)
+    elif action == 'items':
+        txt_list = mkt.get_item_list()
+
+    for txt in txt_list:
+        await bot.say(txt)
+
+
 @commands.cooldown(rate=12, per=120, type=commands.BucketType.channel)
 @bot.command(name='stats', aliases=['item'], pass_context=True,
              brief='Get the stats of a character or item',
              description='Get the stats of a character/crew or item')
 async def stats(ctx, *, name=None):
     if name is None:
-        await bot.say('Enter: {}stats [name]'.format(command_prefix))
+        await bot.say('Enter: {} [name]'.format(command_prefix + ctx.invoked_with))
         return
 
     # First try to find a character match
-    write_log(command_prefix + 'stats {}'.format(name), ctx)
-    result = p.get_stats(name, embed=False)
-    if result is not None:
-        await bot.say(result)
-        found_match = True
+    # (skip this section if command was invoked with 'item'
+    if ctx.invoked_with != 'item':
+        write_log(command_prefix + 'stats {}'.format(name), ctx)
+        result = p.get_stats(name, embed=False)
+        if result is not None:
+            await bot.say(result)
+            found_match = True
 
     # Next try to find an item match
     raw_text = mkt.load_item_design_raw()
@@ -282,12 +313,18 @@ async def best(ctx, slot=None, enhancement=None):
     df_items = mkt.rtbl2items(item_lookup)
     df_filter = mkt.filter_item(
         df_items, slot, enhancement,
-        cols=['ItemDesignName', 'EnhancementValue'])
+        cols=['ItemDesignName', 'EnhancementValue', 'MarketPrice'])
 
     txt = mkt.itemfilter2txt(df_filter)
     if txt is None:
         await bot.say('No entries found for {} slot, {} enhancement'.format(
             slot, enhancement))
+
+        str_slots = ', '.join(df_items['ItemSubType'].value_counts().index)
+        str_enhancements = ', '.join(df_items['EnhancementType'].value_counts().index)
+        txt  = 'Slots: {}\n'.format(str_slots)
+        txt += 'Enhancements: {}'.format(str_enhancements)
+        await bot.say(txt)
     else:
         await bot.say(txt)
 
@@ -313,15 +350,39 @@ async def research(ctx, *, research=None):
         await bot.say(txt)
 
 
+@commands.cooldown(rate=12, per=120, type=commands.BucketType.channel)
+@bot.command(pass_context=True,
+    brief='Get collections',
+    description='Get the details on a specific collection.')
+async def collection(ctx, *, collection=None):
+    if collection is None:
+        txt = 'Enter: {}collection [collection]'.format(command_prefix)
+        await bot.say(txt)
+        return
+    txt = command_prefix + 'collection {}'.format(collection)
+    write_log(txt, ctx)
+
+    print(collection)
+    txt = p.show_collection(collection)
+    if txt is None:
+        await bot.say("No entries found for '{}'".format(collection))
+    else:
+        await bot.say(txt)
+
+
 @commands.cooldown(rate=1, per=600, type=commands.BucketType.channel)
 @bot.command(pass_context=True, hidden=True,
     brief='Send the welcome message to a specific channel',
     description='Send the welcome message to a specific channel')
-async def welcome(ctx, channel='general'):
-    write_log(command_prefix + 'welcome', ctx)
+async def welcome(ctx, channel=''):
+    write_log(command_prefix + 'welcome ' + channel, ctx)
     # await bot.say("message content", embed=your_embed)
     # await bot.send_message(destination, welcome_txt, embed=your_embed)
     # await bot.send_message(ctx.message.channel, welcome_txt)
+    if len(channel) == 0:
+        await bot.say(welcome_txt)
+        return
+
     dest_channel = get_channel_from_str(ctx.message.server, channel)
     if dest_channel is not None:
         await bot.send_message(dest_channel, welcome_txt)
@@ -331,17 +392,21 @@ async def welcome(ctx, channel='general'):
 
 
 @commands.cooldown(rate=12, per=120, type=commands.BucketType.channel)
-@bot.command(pass_context=True, brief='Get the day and time in Melbourne, Australia',
-             description='Get the day and time in Melbourne, Australia. Gives the ' +
-             'name of the Australian holiday, if it is a holiday in Australia.')
+@bot.command(pass_context=True, brief='Get PSS stardate & Melbourne time',
+             description='Get PSS stardate, as well as the day and time in Melbourne, Australia. ' +
+             ' Gives the name of the Australian holiday, if it is a holiday in Australia.')
 async def time(ctx):
     now = datetime.datetime.now()
+    today = datetime.date(now.year, now.month, now.day)
+    pss_start = datetime.date(year=2016, month=1, day=6)
+    pss_stardate = (today - pss_start).days
+    str_time = 'Today is Stardate {}\n'.format(pss_stardate)
+
     mel_tz = pytz.timezone('Australia/Melbourne')
     mel_time = now.replace(tzinfo=pytz.utc).astimezone(mel_tz)
-    str_time = mel_time.strftime('It is %A, %H:%M in Melbourne')
+    str_time += mel_time.strftime('It is %A, %H:%M in Melbourne')
 
     aus_holidays = holidays.Australia(years=now.year, prov='ACT')
-    # now = datetime.date(now.year, now.month, now.day)
     mel_time = datetime.date(mel_time.year, mel_time.month, mel_time.day)
     if mel_time in aus_holidays:
         str_time += '\nIt is also a holiday ({}) in Australia'.format(aus_holidays[mel_time])
@@ -357,6 +422,7 @@ async def testing(ctx, *, action=None):
     if action == 'refresh':
         write_log(command_prefix + 'testing refresh', ctx)
         tbl, rtbl = p.get_char_sheet(refresh=True)
+        raw_text = mkt.load_item_design_raw(refresh=True)
         await bot.say('Refreshed')
     elif action == 'restart':
         write_log(command_prefix + 'testing restart', ctx)

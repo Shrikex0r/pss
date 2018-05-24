@@ -15,19 +15,23 @@ import argparse
 import csv
 import re
 import os
+import pandas as pd
 import urllib.request
 import xml.etree.ElementTree
 from io import StringIO
+from pss_core import *
 
 
 # Discord limits messages to 2000 characters
 MESSAGE_CHARACTER_LIMIT = 2000
 
+base_url = 'http://api2.pixelstarships.com/'
+
 
 # ----- Character Sheet -----------------------------------------------
 def request_new_char_sheet():
     # Download Character Sheet from PSS Servers
-    url = 'https://api2.pixelstarships.com/CharacterService/ListAllCharacterDesigns?languageKey=en'
+    url = base_url + 'CharacterService/ListAllCharacterDesigns?languageKey=en'
     data = urllib.request.urlopen(url).read()
     return data.decode()
 
@@ -37,8 +41,8 @@ def save_char_sheet_raw(char_sheet):
         f.write(char_sheet)
 
 
-def load_char_sheet_raw():
-    if os.path.isfile('pss-chars-raw.txt'):
+def load_char_sheet_raw(refresh=False):
+    if os.path.isfile('pss-chars-raw.txt') and refresh is False:
         with open('pss-chars-raw.txt', 'r') as f:
             raw_text = f.read()
     else:
@@ -93,6 +97,18 @@ def get_char_sheet(refresh=False):
         save_char_sheet_raw(char_sheet)
         tbl, rtbl = save_char_sheet(char_sheet)
     return tbl, rtbl
+
+
+def charsheet_to_df(raw_text):
+    df = pd.DataFrame()
+    root = xml.etree.ElementTree.fromstring(raw_text)
+    for c in root.findall('ListAllCharacterDesigns'):
+        for cc in c.findall('CharacterDesigns'):
+            for i, ccc in enumerate(cc.findall('CharacterDesign')):
+                row = pd.DataFrame(ccc.attrib, index=[i])
+                df = df.append(row)
+    df['CharacterDesignId'] = df['CharacterDesignId'].astype(int)
+    return df
 
 
 # ----- Parsing -------------------------------------------------------
@@ -285,24 +301,28 @@ def print_stats(d, char):
     if special in specials_lookup.keys():
         special = specials_lookup[special]
     eqpt_mask = convert_eqpt_mask(int(stats['EquipmentMask']))
+    coll_id   = stats['CollectionDesignId']
+    if coll_id in collections.keys():
+        coll_name = collections[coll_id]['CollectionName']
+    else:
+        coll_name = 'None'
 
     txt = '**{}** ({})\n'.format(char_name, stats['Rarity'])
     txt += '{}\n'.format(stats['CharacterDesignDescription'])
 
-    txt += 'Race: {}, Gender: {}\n'.format(
-        stats['RaceType'], stats['GenderType'])
-    txt += 'ability = {}\n'.format(stats['SpecialAbilityFinalArgument'])
+    txt += 'Race: {}, Collection: {}, Gender: {}\n'.format(
+        stats['RaceType'], coll_name, stats['GenderType'])
+    txt += 'ability = {} ({})\n'.format(stats['SpecialAbilityFinalArgument'], special)
     txt += 'hp = {}\n'.format(stats['FinalHp'])
     txt += 'attack = {}\n'.format(stats['FinalAttack'])
     txt += 'repair = {}\n'.format(stats['FinalRepair'])
     txt += 'pilot = {}\n'.format(stats['FinalPilot'])
-    txt += 'shield = {}\n'.format(stats['FinalShield'])
+    txt += 'science = {}\n'.format(stats['FinalScience'])
     txt += 'weapon = {}\n'.format(stats['FinalWeapon'])
     txt += 'engine = {}\n'.format(stats['FinalEngine'])
     txt += 'walk/run speed = {}/{}\n'.format(stats['WalkingSpeed'], stats['RunSpeed'])
     txt += 'fire resist = {}\n'.format(stats['FireResistance'])
     txt += 'training capacity = {}\n'.format(stats['TrainingCapacity'])
-    txt += 'special = {}\n'.format(special)
     txt += 'equipment = {}'.format(eqpt_mask)
     return txt
 
@@ -337,15 +357,94 @@ def print_stats(d, char):
 #     embed.add_field(name="equipment", value=eqpt_mask, inline=False)
 #     return embed
 
+# ----- Collections ---------------------------------------------------
+def get_collections():
+    raw_file = 'pss-collections-raw.txt'
+    base_url = 'http://api2.pixelstarships.com/'
+    url = base_url + 'CollectionService/ListAllCollectionDesigns'
+    raw_text = load_data_from_url(raw_file, url, refresh='auto')
+    collections = xmltree_to_dict3(raw_text, 'CollectionDesignId')
+    collection_names = create_reverse_lookup(collections, 'CollectionDesignId', 'CollectionName')
+    return collections, collection_names
+
+
+def get_characters_in_collection(collection_id):
+    raw_file = 'pss-chars-raw.txt'
+    url = base_url + 'CharacterService/ListAllCharacterDesigns?languageKey=en'
+    raw_text = load_data_from_url(raw_file, url, refresh='auto')
+    tbl = xmltree_to_dict3(raw_text, 'CharacterDesignId')
+
+    chars_in_collection = []
+    for k in tbl.keys():
+        c = tbl[k]
+        if int(c['CollectionDesignId']) == int(collection_id):
+            char_name = c['CharacterDesignName']
+            chars_in_collection.append(char_name)
+    return chars_in_collection
+
+
+def show_collection(search_str):
+    raw_file = 'pss-collections-raw.txt'
+    url = base_url + 'CollectionService/ListAllCollectionDesigns'
+    raw_text = load_data_from_url(raw_file, url, refresh='auto')
+    collections = xmltree_to_dict3(raw_text, 'CollectionDesignId')
+    collection_names = create_reverse_lookup(collections, 'CollectionDesignId', 'CollectionName') #id2names
+    collection_ids = create_reverse_lookup(collections, 'CollectionName', 'CollectionDesignId') #names2id
+
+    real_name = get_real_name(search_str, list(collection_ids.keys()))
+    idx = collection_ids[real_name]
+    chars_in_collection = get_characters_in_collection(idx)
+
+    c = collections[idx]
+    txt = ''
+    txt += '**{}** ({})\n'.format(c['CollectionName'], c['CollectionType'])
+    txt += '{}\n'.format(c['CollectionDescription'])
+    txt += 'Combo Min/Max: {}...{}\n'.format(c['MinCombo'], c['MaxCombo'])
+    txt += '{}: '.format(c['EnhancementType'])
+    txt += '{} (Base), {} (Step)\n'.format(c['BaseEnhancementValue'], c['StepEnhancementValue'])
+    txt += 'Characters: {}'.format(', '.join(chars_in_collection))
+    return txt
+
+
+# ----- List ----------------------------------------------------------
+def get_char_list(action):
+    if action == 'newchars' or action == 'chars':
+        char_sheet_raw = load_char_sheet_raw(refresh=True)
+        char_df = charsheet_to_df(char_sheet_raw)
+        char_df = char_df.sort_values('CharacterDesignId', ascending=True)
+
+    if action == 'newchars':
+        with open('pss-last-char.txt') as f:
+            last_char = int(f.read().strip())
+            # print('Last character = {}'.format(last_char))
+
+        cols = ['CharacterDesignId', 'CharacterDesignName']
+        char_df['CharacterDesignId'] = char_df['CharacterDesignId'].astype(int)
+        new_chars = char_df.loc[char_df['CharacterDesignId'] > last_char, cols]
+
+        txt = ''
+        for i, row in enumerate(new_chars.iterrows()):
+            data = row[1]
+            txt += '{:3}: {}\n'.format(data['CharacterDesignId'], data['CharacterDesignName'])
+        return [txt]
+
+    elif action == 'chars':
+        names = list(char_df['CharacterDesignName'].values)
+        print('List of characters: ' + ', '.join(names))
+        txt_list = list_to_text(names)
+        return txt_list
+
 
 # ----- Setup ---------------------------------------------------------
 tbl, rtbl = get_char_sheet(refresh=False)
+collections, collection_names = get_collections()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=
         'Pixel Starships Prestige & Character Sheet API')
-    parser.add_argument('prestige', choices=['to', 'from', 'stats', 'refresh'],
+    parser.add_argument('prestige',
+        choices=['to', 'from', 'stats', 'refresh', 'collection', 'list'],
         help='Prestige direction (to/from character)')
     parser.add_argument('character', help='Character to prestige')
     args = parser.parse_args()
@@ -356,6 +455,13 @@ if __name__ == '__main__':
         result = get_stats(args.character, embed=False)
         print(result)
         # print_stats(rtbl, args.character)
+    elif args.prestige == 'collection':
+        txt = show_collection(args.character)
+        print(txt)
+    elif args.prestige == 'list':
+        txt_list = get_char_list(action=args.character) 
+        for txt in txt_list:
+            print(txt)
     else:
         content, ptbl = get_prestige_data(args.character, args.prestige, rtbl)
         prestige_text = get_prestige_text(ptbl, tbl, args.prestige)

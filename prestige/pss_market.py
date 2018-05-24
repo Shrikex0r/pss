@@ -14,10 +14,12 @@ from __future__ import unicode_literals
 import argparse
 import datetime
 import csv
-import re
+import numpy as np
 import os
 import pandas as pd
+import pss_core as core
 import pss_prestige as p
+import re
 import urllib.request
 import uuid
 import xml.etree.ElementTree
@@ -34,18 +36,28 @@ def save_raw_text(raw_text, filename):
     with open(filename, 'w') as f:
         f.write(raw_text)
 
+def get_base_url(api_version=1, https=False):
+    if https is True:
+        prefix = 'https://'
+    else:
+        prefix = 'http://'
+
+    if api_version==2:
+        return prefix + 'api2.pixelstarships.com/'
+    else:
+        return prefix + 'api.pixelstarships.com/'
 
 # ----- Get Latest Version --------------------------------------------
-def get_latest_version():
-    base_url = 'http://api2.pixelstarships.com/'
+def get_latest_version(api_version=1):
+    base_url = get_base_url(api_version)
     url= base_url + 'SettingService/GetLatestVersion?language=Key=en'
     data = urllib.request.urlopen(url).read()
     return data.decode()
 
 
 # ----- Item Designs --------------------------------------------------
-def get_item_designs():
-    base_url = 'http://api2.pixelstarships.com/'
+def get_item_designs(api_version=1):
+    base_url = get_base_url(api_version)
     url = base_url + 'ItemService/ListItemDesigns2?languageKey=en'
     data = urllib.request.urlopen(url).read()
     return data.decode()
@@ -57,10 +69,10 @@ def save_item_design_raw(raw_text):
     save_raw_text(raw_text, filename)
 
 
-def load_item_design_raw():
+def load_item_design_raw(refresh=False):
     now = datetime.datetime.now()
     filename = 'data/{}.txt'.format(now.strftime('%Y%m%d-%p'))
-    if os.path.isfile(filename):
+    if os.path.isfile(filename) and refresh is False:
         with open(filename, 'r') as f:
             raw_text = f.read()
     else:
@@ -98,13 +110,24 @@ def xmltext_to_df(raw_text):
     return df
 
 
+# ----- Lists ---------------------------------------------------------
+def get_lists(df_items):
+    item_rarities = list(df_items.Rarity.unique())
+    item_enhancements = list(df_items.EnhancementType.unique())
+    item_types = list(df_items.ItemType.unique())
+    item_subtypes = list(df_items.ItemSubType.unique())
+    return item_rarities, item_enhancements, item_types, item_subtypes
+
+
 # ----- Parsing -------------------------------------------------------
 def fix_item(item):
     # Convert to lower case & non alpha-numeric
     item = re.sub('[^a-z0-9]', '', item.lower())
-    item = re.sub('golden', 'gold', item)
+    item = re.sub('anonmask', 'anonymousmask', item)
     item = re.sub('armour', 'armor', item)
-    item = re.sub("dmrm(ar)?k2", "dmrmarkii", item)
+    item = re.sub('bunny', 'rabbit', item)
+    item = re.sub("(darkmatterrifle|dmr)(mark|mk)?(ii|2)", "dmrmarkii", item)
+    item = re.sub('golden', 'gold', item)
     return item
 
 
@@ -130,6 +153,7 @@ def filter_item_designs(search_str, rtbl, filter):
                 continue
 
             # Process
+            # item_price = d['FairPrice']
             item_price = d['MarketPrice']
             item_slot  = re.sub('Equipment', '', d['ItemSubType'])
             item_stat  = d['EnhancementType']
@@ -206,7 +230,10 @@ def itemfilter2txt(df_filter):
     txt = ''
     for row in df_filter.iterrows():
         data = row[1]
-        txt += '{}: {}\n'.format(data[0], data[1])
+        mprice = data['MarketPrice']
+        if mprice == '0':
+            mprice = 'NA'
+        txt += '{}: {} ({} bux)\n'.format(data[0], data[1], mprice)
     return txt
 
 
@@ -219,26 +246,98 @@ def get_item_rlookup(df):
     return item_rlookup
 
 
-def get_ingredients(df, item_rlookup, item_name):
-    txt = ''
+def get_recipe(df, item_rlookup, item_name):
     ingredients = df.loc[df['ItemDesignName'] == item_name, 'Ingredients']
     if len(ingredients) == 1:
-        ingredients = ingredients.values[0].split('|')
+        ingredients = ingredients.values[0]
+        if len(ingredients) == 0:
+            return None
+        ingredients = ingredients.split('|')
+        recipe = {}
         for ingredient in ingredients:
             item_id, item_qty = ingredient.split('x')
-            txt += '{} x {}\n'.format(item_rlookup[item_id], item_qty)
-        return txt.strip()
-    return None
+            recipe[item_rlookup[item_id]] = int(item_qty)
+        return recipe
+    else:
+        return None
+    
+
+def print_recipe(recipe, df_items):
+    txt = ''
+    total = 0
+    for ingredient in recipe.keys():
+        qty = recipe[ingredient]
+        fprice = df_items.loc[df_items['ItemDesignName'] == ingredient, 'FairPrice'].iloc[0]
+        mprice = df_items.loc[df_items['ItemDesignName'] == ingredient, 'MarketPrice'].iloc[0]
+        if mprice == '0':
+            mprice = np.nan
+            txt += '{} x {} (price: NA)\n'.format(qty, ingredient)
+        else:
+            mprice = int(mprice)
+            txt += '{} x {} ({} bux): {} bux\n'.format(qty, ingredient, mprice, qty*mprice)
+        total += qty*mprice
+    if np.isnan(total):
+        txt += 'Crafting Cost: NA'
+    else:
+        txt += 'Crafting Cost: {} bux'.format(total)
+    return txt
+
+
+def collapse_recipe(recipe, df_items, item_rlookup):
+    collapse = False
+    sub_recipe = {}
+    for ingredient in recipe.keys():
+        qty = recipe[ingredient]
+        sub_ingredients = get_recipe(df_items, item_rlookup, ingredient)
+        if sub_ingredients is None:
+            if ingredient in sub_recipe.keys():
+                sub_recipe[ingredient] += recipe[ingredient]
+            else:
+                sub_recipe[ingredient] = recipe[ingredient]
+        else:
+            for sub_ingredient in sub_ingredients:
+                if sub_ingredient in sub_recipe.keys():
+                    sub_recipe[sub_ingredient] += qty * sub_ingredients[sub_ingredient]
+                else:
+                    sub_recipe[sub_ingredient] = qty * sub_ingredients[sub_ingredient]
+            collapse = True
+        # print('{} x {}: {}'.format(qty, ingredient, sub_ingredients))
+    if collapse is True:
+        return sub_recipe
+    else:
+        return None
+
+    
+def get_multi_recipe(name, levels=1):
+    raw_text = load_item_design_raw()
+    item_lookup = parse_item_designs(raw_text)
+    real_name = get_real_name(name, item_lookup)
+
+    df_items = xmltext_to_df(raw_text)
+    item_rlookup = get_item_rlookup(df_items)
+    recipe = get_recipe(df_items, item_rlookup, real_name)
+    
+    txt = ''
+    level = 1
+    while recipe is not None:
+        txt += print_recipe(recipe, df_items)
+        recipe = collapse_recipe(recipe, df_items, item_rlookup)
+        level += 1
+        if level > levels:
+            break
+        if recipe is not None:
+            txt += '\n\n'
+    return txt
 
 
 # ----- Market Data ---------------------------------------------------
 def request_new_market_data(token, subtype='None', rarity='None'):
     # Download Market Data from PSS Servers
+    base_url = get_base_url(api_version)
     txt_subtype='?itemSubType={}'.format(subtype)
     txt_rarity='&rarity={}'.format(rarity)
     txt_token='&accessToken={}'.format(token)
-    base_url = 'http://api2.pixelstarships.com/MessageService/'
-    url = base_url +  'ListActiveMarketplaceMessages2' + txt_subtype \
+    url = base_url + 'MesssageService/ListActiveMarketplaceMessages2' + txt_subtype \
         + txt_rarity + txt_token
     print('url="{}"'.format(url))
     data = urllib.request.urlopen(url).read()
@@ -277,6 +376,15 @@ def get_market_data():
     return market_txt
 
 
+# ----- Lists ---------------------------------------------------------
+def get_item_list():
+    raw_text = load_item_design_raw()
+    df_items = xmltext_to_df(raw_text)
+    items = list(df_items['ItemDesignName'])
+    # print('List of items: ' + ', '.join(items))
+    return core.list_to_text(items)
+
+
 # ----- Main ----------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=
@@ -285,10 +393,16 @@ if __name__ == "__main__":
         help='Get Market Data')
     parser.add_argument('--price',
         help='Get Price on Item')
+    parser.add_argument('--list', action='store_true',
+        help='Get List of items')
     args = parser.parse_args()
 
     if args.market is True:
         print(get_market_data().strip())
+    elif args.list is True:
+        txt_list = get_item_list()
+        for txt in txt_list:
+            print(txt)
     else:
         item_name = args.price
         raw_text = load_item_design_raw()
