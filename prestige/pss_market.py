@@ -28,7 +28,10 @@ from io import StringIO
 
 # Discord limits messages to 2000 characters
 MESSAGE_CHARACTER_LIMIT = 2000
+API_VERSION=2
 HOME = os.getenv('HOME')
+
+base_url = 'http://{}/'.format(core.get_production_server())
 
 
 # ----- Utilities -----------------------------------------------------
@@ -47,17 +50,16 @@ def get_base_url(api_version=1, https=False):
     else:
         return prefix + 'api.pixelstarships.com/'
 
+
 # ----- Get Latest Version --------------------------------------------
-def get_latest_version(api_version=1):
-    base_url = get_base_url(api_version)
+def get_latest_version():
     url= base_url + 'SettingService/GetLatestVersion?language=Key=en'
     data = urllib.request.urlopen(url).read()
     return data.decode()
 
 
 # ----- Item Designs --------------------------------------------------
-def get_item_designs(api_version=1):
-    base_url = get_base_url(api_version)
+def get_item_designs():
     url = base_url + 'ItemService/ListItemDesigns2?languageKey=en'
     data = urllib.request.urlopen(url).read()
     return data.decode()
@@ -65,13 +67,13 @@ def get_item_designs(api_version=1):
 
 def save_item_design_raw(raw_text):
     now = datetime.datetime.now()
-    filename = 'data/{}.txt'.format(now.strftime('%Y%m%d-%p'))
+    filename = 'data/items-{}.txt'.format(now.strftime('%Y%m%d'))
     save_raw_text(raw_text, filename)
 
 
 def load_item_design_raw(refresh=False):
     now = datetime.datetime.now()
-    filename = 'data/{}.txt'.format(now.strftime('%Y%m%d-%p'))
+    filename = 'data/items{}.txt'.format(now.strftime('%Y%m%d'))
     if os.path.isfile(filename) and refresh is False:
         with open(filename, 'r') as f:
             raw_text = f.read()
@@ -197,6 +199,16 @@ def get_real_name(search_str, rtbl):
             return None
 
 
+# ----- Item Stats ----------------------------------------------------
+def get_item_stats(item_name):
+    raw_text = load_item_design_raw()
+    item_lookup = parse_item_designs(raw_text)
+    market_txt = filter_item_designs(item_name, item_lookup, filter='stats')
+    if market_txt is not None:
+        market_txt = '**Item Stats**\n' + market_txt
+    return market_txt
+
+
 # ----- Best Items ----------------------------------------------------
 def rtbl2items(rtbl):
     df_rtbl = pd.DataFrame(rtbl).T
@@ -260,7 +272,7 @@ def get_recipe(df, item_rlookup, item_name):
         return recipe
     else:
         return None
-    
+
 
 def print_recipe(recipe, df_items):
     txt = ''
@@ -307,7 +319,7 @@ def collapse_recipe(recipe, df_items, item_rlookup):
     else:
         return None
 
-    
+
 def get_multi_recipe(name, levels=1):
     raw_text = load_item_design_raw()
     item_lookup = parse_item_designs(raw_text)
@@ -316,7 +328,7 @@ def get_multi_recipe(name, levels=1):
     df_items = xmltext_to_df(raw_text)
     item_rlookup = get_item_rlookup(df_items)
     recipe = get_recipe(df_items, item_rlookup, real_name)
-    
+
     txt = ''
     level = 1
     while recipe is not None:
@@ -330,16 +342,26 @@ def get_multi_recipe(name, levels=1):
     return txt
 
 
+def get_item_recipe(name, levels=5):
+    raw_text = load_item_design_raw()
+    item_lookup = parse_item_designs(raw_text)
+    # print('name = {}'.format(name))
+    real_name = get_real_name(name, item_lookup)
+    # print('real_name = {}'.format(real_name))
+    if real_name is not None:
+        content = get_multi_recipe(real_name, levels)
+    return content, real_name
+
+
 # ----- Market Data ---------------------------------------------------
 def request_new_market_data(token, subtype='None', rarity='None'):
     # Download Market Data from PSS Servers
-    base_url = get_base_url(api_version)
     txt_subtype='?itemSubType={}'.format(subtype)
     txt_rarity='&rarity={}'.format(rarity)
     txt_token='&accessToken={}'.format(token)
-    url = base_url + 'MesssageService/ListActiveMarketplaceMessages2' + txt_subtype \
+    url = base_url + 'MessageService/ListActiveMarketplaceMessages2' + txt_subtype \
         + txt_rarity + txt_token
-    print('url="{}"'.format(url))
+    print('Downloading market data from url="{}"'.format(url))
     data = urllib.request.urlopen(url).read()
     return data.decode()
 
@@ -369,9 +391,9 @@ def process_market_data(mkt_data):
     return market_txt
 
 
-def get_market_data():
+def get_market_data(subtype, rarity):
     token = str(uuid.uuid4())
-    mkt_data = request_new_market_data(token)
+    mkt_data = request_new_market_data(token, subtype, rarity)
     market_txt = process_market_data(mkt_data)
     return market_txt
 
@@ -391,27 +413,53 @@ if __name__ == "__main__":
         'Pixel Starships Market API')
     parser.add_argument('--market', action='store_true',
         help='Get Market Data')
-    parser.add_argument('--price',
+    parser.add_argument('--subtype', default='None',
+        help='Subtype for market data')
+    parser.add_argument('--rarity', default='None',
+        help='Rarity for market data')
+    parser.add_argument('--stats', default=None,
+        help='Get Stats on Item')
+    parser.add_argument('--recipe', default=None,
+        help='Get Recipe for Item')
+    parser.add_argument('--price', default=None,
         help='Get Price on Item')
     parser.add_argument('--list', action='store_true',
         help='Get List of items')
     args = parser.parse_args()
 
     if args.market is True:
-        print(get_market_data().strip())
+        # python3 pss_market.py --market --rarity Unique
+        txt = get_market_data(subtype=args.subtype, rarity=args.rarity)
+        print(txt.strip())
     elif args.list is True:
+        # python3 pss_market.py --list
         txt_list = get_item_list()
         for txt in txt_list:
             print(txt)
-    else:
+    elif args.stats is not None:
+        # python3 pss_market.py --stats 'assault armor'
+        pass
+    elif args.recipe is not None:
+        name = args.recipe
+        content, real_name = get_item_recipe(name, levels=5)
+        if real_name is not None:
+            content = '**Recipe for {}**\n'.format(real_name) + content
+            content = content + '\n\nNote: bux prices listed here may not always be accurate due to transfers between alts/friends or other reasons'
+        print(content)
+    elif args.price is not None:
+        # python3 pss_market.py --price 'assault armor'
         item_name = args.price
         raw_text = load_item_design_raw()
         rtbl = parse_item_designs(raw_text)
-
         real_name = get_real_name(item_name, rtbl)
+
         if real_name is not None:
             print('Getting the price of {}'.format(real_name))
             mkt_text = filter_item_designs(real_name, rtbl, filter='price')
             print(mkt_text)
         else:
             print('{} not found'.format(item_name))
+    else:
+        print('Problem parsing argument list')
+        print('args.stats = {}'.format(args.stats))
+        print('args.price = {}'.format(args.price))

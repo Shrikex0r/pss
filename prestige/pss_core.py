@@ -84,14 +84,15 @@ def list_to_text(lst, max_chars=1900):
     txt_list = []
     txt = ''
     for i, item in enumerate(lst):
-        if len(txt) > max_chars:
-            txt_list += [txt]
-            txt = item
-        elif i == 0:
+        if i == 0:
             txt = item
         else:
-            txt += ', ' + item
-
+            new_text = txt + ', ' + item
+            if len(new_text) > max_chars:
+                txt_list += [txt]
+                txt = item
+            else:
+                txt += ', ' + item
     txt_list += [txt]
     return txt_list
 

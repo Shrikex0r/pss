@@ -25,7 +25,7 @@ from pss_core import *
 # Discord limits messages to 2000 characters
 MESSAGE_CHARACTER_LIMIT = 2000
 
-base_url = 'http://api2.pixelstarships.com/'
+base_url = 'http://{}/'.format(get_production_server())
 
 
 # ----- Character Sheet -----------------------------------------------
@@ -89,14 +89,15 @@ def load_char_sheet(filename='pss-chars.txt'):
     return tbl, rtbl
 
 
-def get_char_sheet(refresh=False):
-    if refresh == False and os.path.isfile('pss-chars.txt'):
-        tbl, rtbl = load_char_sheet()
-    else:
-        char_sheet = request_new_char_sheet()
-        save_char_sheet_raw(char_sheet)
-        tbl, rtbl = save_char_sheet(char_sheet)
-    return tbl, rtbl
+def get_char_sheet(refresh='auto'):
+    url = base_url + 'CharacterService/ListAllCharacterDesigns?languageKey=en'
+    raw_file = 'pss-chars-raw.txt'
+    raw_text = load_data_from_url(raw_file, url, refresh=refresh)
+    ctbl = xmltree_to_dict3(raw_text, 'CharacterDesignId')
+    tbl_i2n = create_reverse_lookup(ctbl, 'CharacterDesignId', 'CharacterDesignName')
+    tbl_n2i = create_reverse_lookup(ctbl, 'CharacterDesignName', 'CharacterDesignId')
+    rarity = create_reverse_lookup(ctbl, 'CharacterDesignName', 'Rarity')
+    return ctbl, tbl_i2n, tbl_n2i, rarity
 
 
 def charsheet_to_df(raw_text):
@@ -118,6 +119,7 @@ def fix_char(char):
     char = re.sub("captain", "captn", char)
     char = re.sub("lolita", "lollita", char)
     return char
+
 
 def parse_char_name(char, rtbl):
     char_original = list(rtbl.keys())
@@ -142,67 +144,63 @@ def char2id(char, rtbl):
     if isinstance(char, str):
         char_name = parse_char_name(char, rtbl)
         if char_name is not None:
-            return rtbl[char_name]
+            return rtbl[char_name], char_name
         else:
-            print("Could not find {}".format(char))
-            return None
+            print("char2id(): could not find the character '{}'".format(char))
+            return None, char
     else:
-        return char
+        return char, char
 
 
 # ----- Prestige API --------------------------------------------------
-def get_prestige_data(char, action, rtbl):
-    char_id = char2id(char, rtbl)
-    if char_id is None:
-        return None, None
-
+def get_prestige_data_from_url(char_id, action):
     if action == 'to':
-        url = 'http://api2.pixelstarships.com/CharacterService/PrestigeCharacterTo?characterDesignId={}'.format(char_id)
+        url = base_url + 'CharacterService/PrestigeCharacterTo?characterDesignId={}'.format(char_id)
         attrib = 'PrestigeCharacterTo'
     elif action == 'from':
-        url = 'http://api2.pixelstarships.com/CharacterService/PrestigeCharacterFrom?characterDesignId={}'.format(char_id)
+        url = base_url + 'CharacterService/PrestigeCharacterFrom?characterDesignId={}'.format(char_id)
         attrib = 'PrestigeCharacterFrom'
     else:
         print('action = "{}" is invalid'.format(action))
-        return None, None
-    data = urllib.request.urlopen(url).read()
-    content = data.decode()
+        return None
+    return get_data_from_url(url)
 
-    tree = xml.etree.ElementTree.parse(StringIO(content))
-    root = tree.getroot()
 
-    tbl = []
-    for c in root.findall(attrib):
-        for cc in c.findall('Prestiges'):
-            for p in cc.findall('Prestige'):
+def xmltree_to_prestige_dict(raw_text):
+    ptbl = []
+    root = xml.etree.ElementTree.fromstring(raw_text)
+    for c in root:
+        for cc in c:
+            for p in cc:
                 char_id1 = p.attrib['CharacterDesignId1']
                 char_id2 = p.attrib['CharacterDesignId2']
                 char_new = p.attrib['ToCharacterDesignId']
-                tbl.append([char_id1, char_id2, char_new])
-    return content, tbl
+                ptbl.append([char_id1, char_id2, char_new])
+    return ptbl
 
 
-def get_prestige_text(ptbl, tbl, direction):
+def prestige_tbl_to_txt(ptbl, tbl_i2n, direction):
     # direction = to, from, or full (default)
 
-    if len(ptbl) == 0:
-        return ["No prestige combinations found"]
-
-    if direction == "to":
-        char_name = tbl[ptbl[0][2]]
-        txt = '**{}** can be prestiged from:\n'.format(char_name)
-    elif direction == "from":
-        char_name = tbl[ptbl[0][0]]
-        txt = '**{}**\n'.format(char_name)
-
+    txt = ''
     txt_list = []
     for i, row in enumerate(ptbl):
+        c1 = row[0]
+        c2 = row[1]
+        c3 = row[2]
+        if c1 in tbl_i2n.keys():
+            c1 = tbl_i2n[c1]
+        if c2 in tbl_i2n.keys():
+            c2 = tbl_i2n[c2]
+        if c3 in tbl_i2n.keys():
+            c3 = tbl_i2n[c3]
+        # print('{}: {} + {} -> {}'.format(i, c1, c2, c3))
         if direction == "to":
-            line = '{} + {}'.format(tbl[row[0]], tbl[row[1]])
+            line = '{} + {}'.format(c1, c2)
         elif direction == "from":
-            line = '+ {} -> {}'.format(tbl[row[1]], tbl[row[2]])
+            line = '+ {} -> {}'.format(c2, c3)
         else:
-            line = '{} + {} -> {}'.format(tbl[row[0]], tbl[row[1]], tbl[row[2]])
+            line = '{} + {} -> {}'.format(c1, c2, c3)
 
         if i > 0:
             line = '\n' + line
@@ -216,9 +214,29 @@ def get_prestige_text(ptbl, tbl, direction):
     return txt_list
 
 
+def get_prestige(char_input, direction, tbl_i2n, tbl_n2i):
+    char_id, char_fixed = char2id(char_input, tbl_n2i)
+    if char_id is None:
+        return ["Character '{}' not found".format(char_fixed)], False
+
+    raw_text = get_prestige_data_from_url(char_id, direction)
+    ptbl = xmltree_to_prestige_dict(raw_text)
+    if len(ptbl) == 0:
+        return ["No prestige combinations found for '{}'".format(char_fixed)], False
+
+    if direction == "to":
+        prestige_txt = ['**{}** can be prestiged from:'.format(char_fixed)]
+    elif direction == "from":
+        prestige_txt = ['**{}**'.format(char_fixed)]
+
+    prestige_txt += prestige_tbl_to_txt(ptbl, tbl_i2n, direction)
+    return prestige_txt, True
+
+
 def show_new_chars(action='prestige'):
     tbl1, rtbl1 = load_char_sheet('pss-chars.txt')
-    tbl2, rtbl2 = get_char_sheet(refresh=True)
+    _, tbl2, rtbl2, _ = get_char_sheet()
+    # ctbl, tbl_i2n, tbl_n2i, rarity = get_char_sheet()
     old_ids = tbl1.keys()
     new_ids = tbl2.keys()
     new_chars = False
@@ -291,8 +309,8 @@ def get_stats(char_name, embed=False):
         return print_stats(d, char_name)
 
 
-def print_stats(d, char):
-    char_name = parse_char_name(char, rtbl)
+def print_stats(d, char_input):
+    char_name = parse_char_name(char_input, tbl_n2i)
     if char_name is None:
         return None
 
@@ -331,13 +349,13 @@ def print_stats(d, char):
 #     char_name = parse_char_name(char, rtbl)
 #     if char_name is None:
 #         return None
-# 
+#
 #     stats = d[char_name]
 #     special = stats['SpecialAbilityType']
 #     if special in specials_lookup.keys():
 #         special = specials_lookup[special]
 #     eqpt_mask = convert_eqpt_mask(int(stats['EquipmentMask']))
-# 
+#
 #     embed = discord.Embed(
 #         title='**{}** ({})\n'.format(char_name, stats['Rarity']),
 #         description=stats['CharacterDesignDescription'], color=0x00ff00)
@@ -360,7 +378,6 @@ def print_stats(d, char):
 # ----- Collections ---------------------------------------------------
 def get_collections():
     raw_file = 'pss-collections-raw.txt'
-    base_url = 'http://api2.pixelstarships.com/'
     url = base_url + 'CollectionService/ListAllCollectionDesigns'
     raw_text = load_data_from_url(raw_file, url, refresh='auto')
     collections = xmltree_to_dict3(raw_text, 'CollectionDesignId')
@@ -436,7 +453,7 @@ def get_char_list(action):
 
 
 # ----- Setup ---------------------------------------------------------
-tbl, rtbl = get_char_sheet(refresh=False)
+ctbl, tbl_i2n, tbl_n2i, rarity = get_char_sheet()
 collections, collection_names = get_collections()
 
 
@@ -450,7 +467,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.prestige == 'refresh':
-        tbl, rtbl = get_char_sheet(refresh=True)
+        ctbl, tbl_i2n, tbl_n2i, rarity = get_char_sheet()
     elif args.prestige == 'stats':
         result = get_stats(args.character, embed=False)
         print(result)
@@ -459,11 +476,15 @@ if __name__ == '__main__':
         txt = show_collection(args.character)
         print(txt)
     elif args.prestige == 'list':
-        txt_list = get_char_list(action=args.character) 
+        # python3 pss_prestige.py list chars
+        # python3 pss_prestige.py list newchars
+        txt_list = get_char_list(action=args.character)
         for txt in txt_list:
             print(txt)
     else:
-        content, ptbl = get_prestige_data(args.character, args.prestige, rtbl)
-        prestige_text = get_prestige_text(ptbl, tbl, args.prestige)
-        for txt in prestige_text:
-            print(txt)
+        # python3 pss_prestige.py to 'Alien Queen'
+        prestige_txt, success = get_prestige(
+            args.character, args.prestige, tbl_i2n, tbl_n2i)
+        if success is True:
+            for txt in prestige_txt:
+                print(txt)
